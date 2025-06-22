@@ -1,0 +1,110 @@
+#include <Arduino.h>
+#include <AccelStepper.h>
+#include <math.h>
+
+#define DRIVER 1 // Use DRIVER = 1 for step/dir drivers
+#define LS_Z 11  // Z_lim
+#define LS_S 10  // Y_lim
+#define ENABLE 8
+
+AccelStepper M_L(AccelStepper::DRIVER, 2, 5);  // STEP = 5, DIR = 2
+AccelStepper M_D(AccelStepper::DRIVER, 3, 6);  // STEP = 6, DIR = 3
+
+int maxSpeed = 1000; // Steps per second
+unsigned long millisPrev = 0;
+unsigned long t = 0;
+int speed = 0;
+
+typedef enum
+{
+  STOP,
+  UP,
+  DOWN
+} State;
+
+typedef struct
+{
+  State now = State::STOP;
+  State prev = State::STOP;
+} StateMachine;
+
+StateMachine Window;
+
+int speedRamp(double milis, double transitionTime, double finalSpeed){
+  // Speed of motor increases slownly by following an S curve
+  return (int)round(finalSpeed * (1 - exp(-pow((milis / (transitionTime / 2)), 2.0))));
+}
+
+void setup()
+{
+  Serial.begin(9600);
+  pinMode(LS_Z, INPUT_PULLUP); // LOW when swithch is activated
+  pinMode(LS_S, INPUT_PULLUP);
+  pinMode(ENABLE, OUTPUT); // HIGH -> steppers can move freely
+
+  M_L.setMaxSpeed(maxSpeed); // Steps per second
+  M_D.setMaxSpeed(maxSpeed);
+}
+
+void loop()
+{
+  if (Window.prev != Window.now)
+    Serial.println(Window.now);
+  Window.prev = Window.now;
+
+  // SERIAL CONTROL
+  if (Serial.available() != 0)
+  {
+    String tmpstate = Serial.readString();
+    tmpstate.toUpperCase();
+    tmpstate.trim();
+
+    if (tmpstate == "UP")
+    {
+      Window.now = State::UP;
+      millisPrev = millis();
+    }
+    else if (tmpstate == "DOWN")
+    {
+      Window.now = State::DOWN;
+      millisPrev = millis();
+    }
+    else if (tmpstate == "STOP")
+      Window.now = State::STOP;
+  }
+  
+  // exit movement states
+  if ((Window.now == State::UP && digitalRead(LS_Z) == 0) || (Window.now == State::DOWN && digitalRead(LS_S) == 0))
+  {
+    Window.now = State::STOP;
+    break;
+  }
+
+  // IO logic
+  switch (Window.now)
+  {
+  case State::STOP:
+  M_L.setSpeed(0);
+  M_D.setSpeed(0);
+  
+  digitalWrite(ENABLE, HIGH); // RELEASE motors
+  break;
+  
+  // This is effectively an OR statement
+  case State::UP:
+  case State::DOWN:
+      t = millis() - millisPrev;
+      speed = speedRamp((double)t, 1000.0, maxSpeed) + 100; // Slowly increase speed using S-curve
+
+      digitalWrite(ENABLE, LOW); // ENABLE motors
+
+      M_L.setSpeed(Window.now == State::UP ? speed : -speed);
+      M_D.setSpeed(Window.now == State::UP ? -speed : speed);
+
+      M_L.runSpeed(); // Run steppers with current speed
+      M_D.runSpeed();
+      break;
+  }
+}
+¸<¸y   x5rfg67j
+¸<¸y
